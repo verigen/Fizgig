@@ -1356,6 +1356,8 @@ class LoRATrainerGUI:
         self.dataset_caption_ext_var = tk.StringVar(value=".txt")
         self.dataset_jsonl_file_var = tk.StringVar()
         self.dataset_megapixels_var = tk.StringVar(value="0.25")
+        # "Also train at": more sizes beside Target Megapixels ("0.25, 1.0"), each the training folders again
+        self.dataset_extra_megapixels_var = tk.StringVar(value="")
         # MiniMax H3, datasets with clips: clips cache and train at this size or smaller
         self.clip_megapixels_var = tk.StringVar(value="0.25")
         # Image Prep's target area. Training buckets by AREA and never upscales, so prepping to a
@@ -1415,7 +1417,7 @@ class LoRATrainerGUI:
         for _v in (self.image_folder_var, self.dataset_caption_ext_var,
                    self.dataset_megapixels_var, self.dataset_batch_size_var,
                    self.dataset_enable_bucket_var, self.dataset_no_upscale_var,
-                   self.clip_megapixels_var):
+                   self.clip_megapixels_var, self.dataset_extra_megapixels_var):
             _v.trace_add("write", _auto_save_ds)
         # Multi Concept adds [[datasets]] blocks, so its toggle and folders have to rewrite the
         # TOML too — they are created later (Training tab), hence the deferred hook-up.
@@ -4025,6 +4027,19 @@ class LoRATrainerGUI:
                        "wants 24-32 GB.",
                   foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720).pack(
             anchor=tk.W)
+        _extra_mp_frame = ttk.Frame(_mp_block)
+        _extra_mp_frame.pack(anchor=tk.W, pady=(6, 0))
+        ttk.Label(_extra_mp_frame, text="Also train at:").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Entry(_extra_mp_frame, textvariable=self.dataset_extra_megapixels_var, width=14).pack(side=tk.LEFT)
+        ttk.Label(_extra_mp_frame, text="MP, comma-separated (e.g. 0.25). Empty = Target Megapixels only.",
+                  foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(_mp_block,
+                  text="Multi-resolution: each size trains the whole dataset again at that area (its own cache), "
+                       "so an epoch sees every image once per size — e.g. Target 1.0 with 0.25 here for "
+                       "composition at low res and detail at high res. Steps and caching grow with each size; "
+                       "Auto block swap plans for the largest.",
+                  foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720).pack(
+            anchor=tk.W)
         self._clip_mp_frame = ttk.Frame(_mp_block)
         self._clip_mp_labelbox = tk.Frame(self._clip_mp_frame, height=1, bg=COLORS["bg_surface"])
         self._clip_mp_labelbox.pack(side=tk.LEFT, fill=tk.Y)
@@ -5108,6 +5123,8 @@ class LoRATrainerGUI:
             self.dataset_megapixels_var.set(preset["DATASET_MEGAPIXELS"])
         if "CLIP_MEGAPIXELS" in preset and hasattr(self, "clip_megapixels_var"):
             self.clip_megapixels_var.set(preset["CLIP_MEGAPIXELS"])
+        if "DATASET_EXTRA_MEGAPIXELS" in preset and hasattr(self, "dataset_extra_megapixels_var"):
+            self.dataset_extra_megapixels_var.set(preset["DATASET_EXTRA_MEGAPIXELS"])
         if "DATASET_BATCH_SIZE" in preset and hasattr(self, "dataset_batch_size_var"):
             self.dataset_batch_size_var.set(preset["DATASET_BATCH_SIZE"])
         # Run card's Enable Cache checkbox
@@ -6131,6 +6148,8 @@ class LoRATrainerGUI:
                          if getattr(self, "dataset_caption_ext_var", None) else ".txt"),
             batch_size=(self.dataset_batch_size_var.get() if hasattr(self, "dataset_batch_size_var") else 1),
             megapixels=self.dataset_megapixels_var.get(),
+            # RefMod's Target MP sizes its references, not the training stills: no extra sizes there
+            extra_megapixels=("" if self._is_refmod_arch() else self.dataset_extra_megapixels_var.get()),
             enable_bucket=bool(self.dataset_enable_bucket_var.get()),
             no_upscale=bool(self.dataset_no_upscale_var.get()),
             cache_root=(self.prefs_vars["cache_dir"].get().strip() if "cache_dir" in self.prefs_vars else ""),
@@ -6234,6 +6253,7 @@ class LoRATrainerGUI:
         _grab("dataset_no_upscale_var", "BUCKET_NO_UPSCALE")
         _grab("dataset_caption_ext_var", "DATASET_CAPTION_EXT")
         _grab("dataset_megapixels_var", "DATASET_MEGAPIXELS")
+        _grab("dataset_extra_megapixels_var", "DATASET_EXTRA_MEGAPIXELS")
         if self._dataset_has_clips():
             _grab("clip_megapixels_var", "CLIP_MEGAPIXELS")
         _grab("dataset_batch_size_var", "DATASET_BATCH_SIZE")

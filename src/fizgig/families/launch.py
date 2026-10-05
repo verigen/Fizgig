@@ -11,6 +11,7 @@ FAMILY_EDIT, ...) plus the values the app reads from its other tabs, all lower c
     models                      {pref_key: path} for the family's model files (Preferences)
     image_folder, caption_ext   the training folder (Start tab) and its caption extension
     batch_size, megapixels      Dataset settings
+    extra_megapixels            "Also train at": more sizes ("0.25, 1.0"), each its own dataset blocks; "" for none
     enable_bucket, no_upscale
     cache_root                  the cache folder from Preferences (each dataset gets its own folder inside it)
     blocks_swap                 the Block Swap box as typed ("Auto (detect from GPU)", "8", ...)
@@ -218,6 +219,11 @@ def problems(desc, inputs):
     required model file (plus the training adapter while it is on) set and on disk."""
     errors = []
     folder = _s(inputs.get("image_folder"))
+    try:
+        extra_megapixels(inputs)
+    except ValueError:
+        errors.append(f"Also train at must be megapixels above 0 separated by commas, e.g. 0.25, 1.0 "
+                      f"(got {_s(inputs.get('extra_megapixels'))!r})")
     if ft_on(desc, inputs):
         for key, label in (("FAMILY_FT_ROTATIONS", "Rotations"), ("FAMILY_FT_SAVE_EVERY", "Save every"),
                            ("FAMILY_FT_ROTATE_EVERY", "Epochs per window")):
@@ -710,14 +716,49 @@ def cache_dir_for(cache_root, image_dir):
     return os.path.join(cache_root, f"{nm}-{h}")
 
 
+def mp_side(mp):
+    """The square side of `mp` megapixels on the 16-pixel grid (1.0 -> 992)."""
+    return int((float(mp) * 1_000_000) ** 0.5) // 16 * 16
+
+
+def extra_megapixels(inputs):
+    """The "Also train at" megapixels: "0.25, 1.0" (or a list) -> [0.25, 1.0]. Raises ValueError on an entry that
+    is not a number above 0."""
+    raw = inputs.get("extra_megapixels") or ""
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).replace(";", ",").split(",")
+    out = []
+    for p in (_s(x) for x in parts):
+        if p:
+            v = float(p)
+            if v <= 0:
+                raise ValueError(f"Also train at {p}")
+            out.append(v)
+    return out
+
+
+def extra_sides(inputs, side):
+    """The extra resolutions' square sides, without the Target Megapixels one (`side`) and without repeats: two
+    entries on the same grid square would cache and train the same pictures twice."""
+    out = []
+    for mp in extra_megapixels(inputs):
+        s = mp_side(mp)
+        if s >= 16 and s != side and s not in out:
+            out.append(s)
+    return out
+
+
 def dataset_toml(desc, inputs):
     """The dataset TOML for the run: the training folder at Target Megapixels (a square of that area on the
     16-pixel grid), an edit's originals or a slider's -1 end as its control folder, and its own cache folder.
-    Raises ValueError on a Target Megapixels or Batch Size that is not a number."""
+    Each "Also train at" size repeats the training folders' blocks at that resolution, with a cache folder of its
+    own (the cache file is named by the image, not its bucket, so two sizes cannot share one); an epoch then sees
+    every picture once per size. A fine-tune's regularisation set stays at Target Megapixels.
+    Raises ValueError on a Target Megapixels, Also train at or Batch Size that is not a number."""
     mp = float(inputs.get("megapixels"))
     if mp <= 0:
         raise ValueError(f"Target Megapixels {mp}")
-    side = int((mp * 1_000_000) ** 0.5) // 16 * 16
+    side = mp_side(mp)
+    sides = extra_sides(inputs, side)
     batch = int(inputs.get("batch_size"))
     folder = _s(inputs.get("image_folder"))
     extra = [_s(f) for f in (inputs.get("extra_folders") or []) if _s(f)] if desc.multi_concept else []
@@ -744,6 +785,17 @@ def dataset_toml(desc, inputs):
         lines += ["", "[[datasets]]", f'image_directory = "{f.replace(chr(92), "/")}"']
         if root:
             lines.append(f'cache_directory = "{cache_dir_for(root, f).replace(chr(92), "/")}"')
+    for s in sides:                      # Also train at: the same folders again at another size
+        for i, f in enumerate([folder] + extra):
+            if not f:
+                continue
+            lines += ["", "[[datasets]]", f'image_directory = "{f.replace(chr(92), "/")}"', f"resolution = [{s}, {s}]"]
+            if i == 0 and edit_on(desc, inputs):
+                lines.append(f'control_directory = "{_s(inputs.get("FAMILY_EDIT_DIR")).replace(chr(92), "/")}"')
+            elif i == 0 and slider_on(desc, inputs, "pairs"):
+                lines.append(f'control_directory = "{_s(inputs.get("FAMILY_SLIDER_DIR")).replace(chr(92), "/")}"')
+            cd = cache_dir_for(root, f) if root else os.path.join(f, "cache")
+            lines.append(f'cache_directory = "{(cd + f"-{s}px").replace(chr(92), "/")}"')
     reg = ft_reg_dir(desc, inputs)
     if reg:                              # a fine-tune's regularisation set: its own block (and cache folder)
         lines += ["", "[[datasets]]", f'image_directory = "{reg.replace(chr(92), "/")}"']

@@ -854,8 +854,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     auto_precision = precision == "auto"
     if precision == "auto" or blocks_to_swap < 0:
         req = (precision, blocks_to_swap)
-        res = user_config.get("general", {}).get("resolution") or [1024, 1024]
-        mp = (res[0] * res[1] if isinstance(res, (list, tuple)) else res * res) / 1e6
+        # the largest size any block trains at (Also train at gives blocks their own resolution)
+        gen = user_config.get("general", {}).get("resolution") or [1024, 1024]
+        mp = max((res[0] * res[1] if isinstance(res, (list, tuple)) else res * res) / 1e6
+                 for res in [gen] + [d["resolution"] for d in user_config.get("datasets", []) if d.get("resolution")])
         own = driver.plan_run(precision, blocks_to_swap, group=group, run=dict(
             dit_path=dit_path, network_type=network_type, network_dim=network_dim, lokr_factor=lokr_factor,
             optimizer_type=optimizer_type, training_adapter=training_adapter, context_lora_path=context_lora_path,

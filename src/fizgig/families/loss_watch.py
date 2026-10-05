@@ -48,6 +48,22 @@ def _items(group):
     return out
 
 
+def _siblings(group):
+    """item -> every ItemInfo of the same picture: one trained at more than one size (Also train at) is an item in
+    each size's dataset, each with its own text cache to keep in step. Matched by image folder and key - the key is
+    the file name, which two Multi Concept folders can share."""
+    by_src, src = {}, {}
+    for ds in group.datasets:
+        bm = getattr(ds, "batch_manager", None)
+        if bm is not None:
+            folder = os.path.normcase(os.path.abspath(str(getattr(ds, "image_directory", "") or "")))
+            for bucket in bm.buckets.values():
+                for it in bucket:
+                    by_src.setdefault((folder, str(it.item_key)), []).append(it)
+                    src[id(it)] = (folder, str(it.item_key))
+    return lambda it: by_src.get(src.get(id(it)), [it])
+
+
 class Watch:
     """The run's loss watch and the state around it. `watch` is None when every toggle is off."""
 
@@ -207,14 +223,16 @@ class Watch:
             if not todo:        # every stuck image failed to caption: nothing to re-encode, they retry next time
                 _remove(processing)
                 return
+            siblings = _siblings(self.group)
             te = self.driver.load_text_encoder(self.te_path, device)
             try:
                 desc = self.driver.description
                 for i in range(0, len(todo), 4):
                     chunk = todo[i:i + 4]
                     for (_, item, cap, _), cond in zip(chunk, self.driver.encode_text(te, [c for _, _, c, _ in chunk])):
-                        item.caption = cap
-                        cache.save_cond(desc, item, cond)     # the loader reads this file every step
+                        for it in siblings(item):
+                            it.caption = cap
+                            cache.save_cond(desc, it, cond)     # the loader reads this file every step
                 ok = True
             finally:
                 self.driver.unload_text_encoder(te)
